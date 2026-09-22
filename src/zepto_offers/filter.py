@@ -14,24 +14,29 @@ from .normalize import (
 
 def _offer_blob(offer: Offer, raw: dict | None = None) -> str:
     raw = raw or {}
-    return " ".join(
-        str(x)
-        for x in (
-            offer.title,
-            offer.bank_or_card,
-            offer.promo_code,
-            offer.terms,
-            offer.unlock_message,
-            raw.get("description"),
-            raw.get("subtitle"),
-            raw.get("subheading"),
-            raw.get("bankName"),
-            raw.get("instrumentName"),
-            raw.get("offerType"),
-            raw.get("couponType"),
-        )
-        if x
-    )
+    parts: list[str] = []
+    for x in (
+        offer.title,
+        offer.bank_or_card,
+        offer.promo_code,
+        offer.terms,
+        offer.unlock_message,
+        raw.get("description"),
+        raw.get("subtitle"),
+        raw.get("subheading"),
+        raw.get("bankName"),
+        raw.get("instrumentName"),
+        raw.get("offerType"),
+        raw.get("couponType"),
+    ):
+        if not x:
+            continue
+        s = str(x).strip()
+        # Placeholder labels must not satisfy BANK_KEYWORDS via the word "bank"
+        if s.lower() in {"unknown bank/card", "unknown", "n/a", "untitled", "untitled offer"}:
+            continue
+        parts.append(s)
+    return " ".join(parts)
 
 
 def is_bank_or_card_offer(offer: Offer, raw: dict | None = None) -> bool:

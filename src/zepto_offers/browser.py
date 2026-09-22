@@ -57,6 +57,9 @@ def _is_authenticated_from_cookies(cookies: list[dict[str, Any]]) -> bool:
     user_id = lower.get("user_id") or lower.get("userid") or lower.get("uid") or ""
     is_auth = (by_name.get("isAuth") or lower.get("isauth") or "").strip().lower()
 
+    # Explicit logout / guest flag wins even if stale tokens linger
+    if is_auth in {"false", "0", "no"}:
+        return False
     if is_auth in {"true", "1", "yes"} and (access or user_id):
         return True
     if access and len(access) > 20 and user_id:
