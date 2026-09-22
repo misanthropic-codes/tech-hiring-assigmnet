@@ -1,0 +1,79 @@
+{
+  "storeId": "b4dc8d65-ed2e-4142-81b6-373982b13500",
+  "storeName": "BLR-Whitefield New",
+  "source": "synthetic_from_assessment_screenshot",
+  "sections": [
+    {
+      "tab": "Payment Offers",
+      "coupons": [
+        {
+          "id": "idfc-flat-125",
+          "offerType": "BANK_OFFER",
+          "title": "Flat ₹125 Off",
+          "subtitle": "IDFC FIRST Bank",
+          "bankName": "IDFC FIRST Bank",
+          "couponCode": "ZEPIDFCCC",
+          "minimumOrderValue": 599,
+          "discountType": "flat",
+          "discountAmount": 125,
+          "status": "LOCKED",
+          "description": "Shop for ₹549 more to unlock"
+        },
+        {
+          "id": "hsbc-15pct",
+          "offerType": "BANK_OFFER",
+          "title": "Get 15% up to ₹125 off",
+          "subtitle": "HSBC",
+          "bankName": "HSBC",
+          "couponCode": "ZEPHSBC",
+          "minimumOrderValue": 999,
+          "discountType": "percent",
+          "discountAmount": 15,
+          "maxDiscount": 125,
+          "status": "LOCKED",
+          "description": "Shop for ₹949 more to unlock"
+        },
+        {
+          "id": "hdfc-mastercard-125",
+          "offerType": "BANK_OFFER",
+          "title": "Flat ₹125 Off",
+          "subtitle": "HDFC Mastercard",
+          "bankName": "HDFC Mastercard",
+          "couponCode": "ZEPMAHDFCDC",
+          "minimumOrderValue": 599,
+          "discountType": "flat",
+          "discountAmount": 125,
+          "status": "LOCKED",
+          "description": "Shop for ₹549 more to unlock"
+        },
+        {
+          "id": "amazon-pay-cashback",
+          "offerType": "WALLET_OFFER",
+          "title": "Get Upto ₹50 Cashback on using Amazon Pay",
+          "subtitle": "Amazon Pay",
+          "bankName": "Amazon Pay",
+          "couponCode": null,
+          "minimumOrderValue": 99,
+          "discountType": "cashback",
+          "discountAmount": 50,
+          "status": "LOCKED",
+          "description": "Shop for ₹49 more to apply"
+        },
+        {
+          "id": "delivery-free",
+          "offerType": "DELIVERY",
+          "title": "Free delivery above ₹149",
+          "subtitle": "Delivery fee",
+          "status": "LOCKED"
+        },
+        {
+          "id": "generic-promo",
+          "offerType": "PRODUCT",
+          "title": "Save extra with Zepto Pass",
+          "subtitle": "Membership",
+          "couponCode": "PASS50"
+        }
+      ]
+    }
+  ]
+}
