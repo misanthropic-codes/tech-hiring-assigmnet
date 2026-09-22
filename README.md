@@ -25,10 +25,12 @@ even when Zepto’s API labels them `BANK_OFFER`. RuPay / Visa / Mastercard cred
 1. Playwright opens Zepto in real Chrome (AWS WAF blocks naïve headless/curl).
 2. Reuses auth cookies from `storage_state.json` when already logged in (skips OTP).
 3. After cart → Payment Offers, intercepts `bff-gateway.zepto.com` → `cfs/api/v1/cart/coupons/fetch-list`.
-4. Normalizes Zepto’s `pageLayout` coupon-card widgets and filters to bank/card offers.
-5. Offline `--fixture` mode demos the pipeline using a sample shaped like the assessment screenshot.
+4. Saves a **replayable request snapshot** (`output/captured_fetch_list_request.json`).
+5. Later runs can use **`--replay`** (HTTP only, no browser) with that capture + cookies.
+6. Normalizes Zepto’s `pageLayout` coupon-card widgets and filters to bank/card offers.
+7. Offline `--fixture` mode demos the pipeline using a sample shaped like the assessment screenshot.
 
-See [docs/architecture.md](docs/architecture.md) and [docs/research-notes.md](docs/research-notes.md).
+See [docs/architecture.md](docs/architecture.md).
 
 ## Prerequisites (do this before a live run)
 
@@ -90,15 +92,27 @@ PYTHONPATH=src python -m zepto_offers --login --phone 9523035004
 - Writes `storage_state.json` (gitignored).
 - Skips OTP automatically if auth cookies already exist.
 
-### 3) Live extract (normal run)
+### 3) Live extract (normal run — also saves API capture for replay)
 
 ```bash
 PYTHONPATH=src python -m zepto_offers --live --out output/offers.json
 ```
 
 Prints a readable offer list to the terminal, then full JSON, and writes `output/offers.json`.
+Also writes **`output/captured_fetch_list_request.json`** (cookies + headers + URL) for browserless replay.
 
-### 4) Live extract when session expired / first time
+### 4) Replay without browser (stable path)
+
+After a successful `--live` capture:
+
+```bash
+PYTHONPATH=src python -m zepto_offers --replay --out output/offers.json
+```
+
+This calls `bff-gateway…/cfs/api/v1/cart/coupons/fetch-list` via HTTP using the saved request.
+If you get `401` / `429`, refresh with `--live` or `--login` once, then `--replay` again.
+
+### 5) Live extract when session expired / first time
 
 ```bash
 PYTHONPATH=src python -m zepto_offers --live --wait-login --phone 9523035004 --out output/offers.json
@@ -110,49 +124,18 @@ Enter OTP in Chrome if prompted. Optional location override:
 PYTHONPATH=src python -m zepto_offers --live --lat 12.96902 --lng 77.75395 --out output/offers.json
 ```
 
-## Debugging commands
-
-### Check last saved offers quickly
+## Debugging
 
 ```bash
+# Last saved offers
 python3 -c "import json; d=json.load(open('output/offers.json')); print(len(d.get('offers',[])), 'offers'); print([o.get('promo_code') for o in d.get('offers',[])[:10]])"
-```
 
-### Inspect raw intercepted API payloads
+# Unit tests
+PYTHONPATH=src python -m pytest tests/ -v
 
-```bash
-python3 -c "import json,os; p='output/raw_coupon_responses.json'; print('exists', os.path.exists(p), 'bytes', os.path.getsize(p) if os.path.exists(p) else 0); raw=json.load(open(p)); print('responses', len(raw)); print(raw[0]['url'] if raw else 'empty')"
-```
-
-### Re-normalize + filter from a saved raw capture (no browser)
-
-Useful when live UI clicked wrong but `raw_coupon_responses.json` still has `fetch-list`:
-
-```bash
-PYTHONPATH=src python - <<'PY'
-import json
-from pathlib import Path
-from zepto_offers.filter import filter_bank_offers
-from zepto_offers.normalize import extract_raw_offers, normalize_offers
-raw = json.loads(Path('output/raw_coupon_responses.json').read_text())
-payload = max(
-    (r['payload'] for r in raw if isinstance(r.get('payload'), dict)),
-    key=lambda p: json.dumps(p).upper().count('BANK_OFFER'),
-    default=None,
-)
-assert payload, 'no usable payload in raw file'
-offers = normalize_offers(payload)
-kept, excluded = filter_bank_offers(offers, extract_raw_offers(payload))
-print(f'kept {len(kept)} excluded {excluded}')
-for o in kept[:15]:
-    print(o.promo_code, '|', o.title, '|', o.bank_or_card)
-PY
-```
-
-### Unit / edge-case tests
-
-```bash
-PYTHONPATH=src python -m pytest tests/test_edge_cases.py tests/test_filter_fixture.py -v
+# Session cookies present?
+ls -la storage_state.json
+python3 -c "import json; c=json.load(open('storage_state.json')).get('cookies',[]); print([x['name'] for x in c if x['name'] in ('isAuth','accessToken','user_id')])"
 ```
 
 ### Common failure: “No coupon payload captured”
@@ -161,17 +144,8 @@ PYTHONPATH=src python -m pytest tests/test_edge_cases.py tests/test_filter_fixtu
 |---|---|
 | Not logged in / session expired | `--login --phone …` or `--live --wait-login --phone …` |
 | No delivery location / store | Set address on Zepto (or `--lat` / `--lng`) |
-| Coupons UI not opened | Check `artifacts/debug_no_coupons.png` if present; retry `--live` |
-| Empty `output/offers.json` after a failed run | Re-run live; failed runs no longer wipe a good `raw_*.json` when capture is empty |
-| Editor shows 1 empty line | Reload file from disk (content is on disk) |
-
-Confirm session file exists:
-
-```bash
-ls -la storage_state.json
-python3 -c "import json; c=json.load(open('storage_state.json')).get('cookies',[]); print([x['name'] for x in c if x['name'] in ('isAuth','accessToken','user_id')])"
-```
-
+| Coupons UI not opened | Retry `--live`; confirm cart has an item |
+| Capture expired for `--replay` | Re-run `--live` to refresh `captured_fetch_list_request.json` |
 ## Example output
 
 ```text
@@ -210,13 +184,11 @@ python3 -c "import json; c=json.load(open('storage_state.json')).get('cookies',[
 ## Project layout
 
 ```text
-src/zepto_offers/     CLI + browser intercept + normalize/filter
+src/zepto_offers/     CLI + browser intercept + replay + normalize/filter
 fixtures/             Offline sample (assessment-like bank offers)
-output/               Live offers.json + raw_coupon_responses.json (gitignored)
-artifacts/            Debug screenshots when capture fails
-docs/architecture.md  System design + sequence
-docs/research-notes.md  Live reverse-engineering notes
-tests/                Fixture + edge-case tests
+output/               Live offers.json + capture (gitignored)
+docs/architecture.md  System design
+tests/                Edge-case tests
 ```
 
 ## Interview extension points

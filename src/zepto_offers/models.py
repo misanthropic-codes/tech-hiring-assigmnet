@@ -42,7 +42,7 @@ class Offer(BaseModel):
 class OfferReport(BaseModel):
     source: str = "zepto_payment_offers"
     fetched_at: datetime = Field(default_factory=datetime.utcnow)
-    mode: Literal["live", "fixture"] = "live"
+    mode: Literal["live", "fixture", "replay"] = "live"
     store: StoreContext = Field(default_factory=StoreContext)
     offers: list[Offer] = Field(default_factory=list)
     excluded_count: int = 0

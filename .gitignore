@@ -20,9 +20,8 @@ build/
 
 # Runtime outputs
 output/
-artifacts/*.json
+artifacts/*
 !artifacts/.gitkeep
-!artifacts/sample_output.json
 *.log
 
 # OS / IDE

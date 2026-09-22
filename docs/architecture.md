@@ -142,7 +142,7 @@ User                CLI                 Playwright              Zepto BFF
 |---|---|
 | WAF 202/429 | Real Chrome channel, headed, reuse cookies |
 | Login required | Interactive `--login`, persist `storage_state.json` |
-| Endpoint rename | Match URL substring `coupons/fetch-list`; fallback DOM parse of Payment Offers tab |
+| Endpoint rename | Match URL substring `cfs/api/v1/cart/coupons/fetch-list` |
 | Type field missing | Keyword allowlist (Bank, Visa, Mastercard, RuPay, …) + denylist (wallet, Amazon Pay, delivery) |
 | Location drift | Pin lat/lng via env |
 

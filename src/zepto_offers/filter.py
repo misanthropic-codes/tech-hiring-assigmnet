@@ -5,7 +5,6 @@ import re
 from .models import Offer
 from .normalize import (
     BANK_KEYWORDS,
-    BANK_OFFER_TYPES,
     CARD_KEYWORDS,
     NON_BANK_KEYWORDS,
     NON_BANK_TYPES,
@@ -77,17 +76,7 @@ def is_bank_or_card_offer(offer: Offer, raw: dict | None = None) -> bool:
     if has_bank and not is_wallet_upi:
         return True
 
-    # Do NOT keep bare BANK_OFFER — Zepto mislabels many non-card payment offers
-    if type_hint in BANK_OFFER_TYPES:
-        return False
-
-    partner = str(raw.get("partnerName") or raw.get("brandName") or offer.bank_or_card or "")
-    if partner and partner.lower() not in {"unknown bank/card", "unknown", "n/a"}:
-        if CARD_KEYWORDS.search(partner) or (
-            BANK_KEYWORDS.search(partner) and not NON_BANK_KEYWORDS.search(partner)
-        ):
-            return True
-
+    # Bare type labels (incl. BANK_OFFER) without bank/card copy are not enough
     return False
 
 

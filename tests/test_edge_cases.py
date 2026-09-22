@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from zepto_offers.browser import (  # noqa: E402
+    FETCH_LIST_SUBSTRING,
     _is_authenticated_from_cookies,
-    is_fetch_list_url,
 )
 from zepto_offers.cli import main  # noqa: E402
 from zepto_offers.filter import filter_bank_offers, is_bank_or_card_offer  # noqa: E402
@@ -168,9 +168,9 @@ class TestNormalizeEdgeCases:
                 ]
             }
         }
-        # No coupon meta → skipped by widget extractor; may still walk
+        # No coupon meta → skipped by widget extractor
         offers = normalize_offers(payload)
-        assert isinstance(offers, list)
+        assert offers == []
 
     def test_widget_happy_path(self):
         payload = {
@@ -307,10 +307,10 @@ class TestCookieAuthEdgeCases:
 
 class TestUrlHelpers:
     def test_fetch_list_url(self):
-        assert is_fetch_list_url(
+        assert FETCH_LIST_SUBSTRING in (
             "https://bff-gateway.zepto.com/cfs/api/v1/cart/coupons/fetch-list?x=1"
         )
-        assert not is_fetch_list_url("https://bff-gateway.zepto.com/cfs/api/v1/cart")
+        assert FETCH_LIST_SUBSTRING not in "https://bff-gateway.zepto.com/cfs/api/v1/cart"
 
 
 # ---------------------------------------------------------------------------

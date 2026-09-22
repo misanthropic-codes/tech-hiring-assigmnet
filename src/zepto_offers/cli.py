@@ -9,10 +9,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .browser import OfferBrowser
+from .browser import DEFAULT_CAPTURE_PATH, OfferBrowser
 from .filter import filter_bank_offers
 from .models import OfferReport, StoreContext
 from .normalize import extract_raw_offers, normalize_offers
+from .replay import replay_fetch_list
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +29,6 @@ def _build_report(
 ) -> OfferReport:
     raw_items = extract_raw_offers(payload)
     normalized = normalize_offers(payload)
-    # Align raw items to normalized length for filtering context
     kept, excluded = filter_bank_offers(normalized, raw_items)
     return OfferReport(
         fetched_at=datetime.now(timezone.utc),
@@ -37,10 +37,7 @@ def _build_report(
         offers=kept,
         excluded_count=excluded,
         notes=notes or [],
-        raw_meta={
-            "raw_offer_count": len(raw_items),
-            "normalized_count": len(normalized),
-        },
+        raw_meta={"raw_offer_count": len(raw_items)},
     )
 
 
@@ -97,13 +94,50 @@ def cmd_live(args: argparse.Namespace) -> int:
     return _emit(report, args)
 
 
+def cmd_replay(args: argparse.Namespace) -> int:
+    capture = args.capture_request or os.getenv("ZEPTO_CAPTURE_REQUEST") or str(DEFAULT_CAPTURE_PATH)
+    storage = args.storage_state or os.getenv("ZEPTO_STORAGE_STATE") or "storage_state.json"
+    print(f"Replaying fetch-list without browser (capture={capture})…", flush=True)
+    try:
+        result = replay_fetch_list(capture_path=capture, storage_state=storage)
+    except FileNotFoundError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2), file=sys.stderr)
+        return 2
+
+    if result.payload is None:
+        print(
+            json.dumps(
+                {
+                    "error": "Replay returned no usable payload",
+                    "status_code": result.status_code,
+                    "notes": result.notes,
+                    "hint": "Run --live once to refresh output/captured_fetch_list_request.json, then --replay",
+                },
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+
+    report = _build_report(
+        payload=result.payload,
+        mode="replay",
+        store=StoreContext(id=result.store_id, lat=result.lat or args.lat, lng=result.lng or args.lng),
+        notes=result.notes
+        + ([f"matched_url={result.matched_url}"] if result.matched_url else [])
+        + ([f"http_status={result.status_code}"] if result.status_code is not None else []),
+    )
+    return _emit(report, args)
+
+
 def cmd_login(args: argparse.Namespace) -> int:
     storage = Path(args.storage_state or os.getenv("ZEPTO_STORAGE_STATE") or "storage_state.json")
     phone = args.phone or os.getenv("ZEPTO_PHONE")
     with OfferBrowser(lat=args.lat, lng=args.lng, headed=True, storage_state=None, phone=phone) as browser:
         path = browser.save_login_state(storage, phone=phone)
     print(f"Saved Playwright storage state to {path}", flush=True)
-    print("Next: python -m zepto_offers --live", flush=True)
+    print("Next: python -m zepto_offers --live   # also saves replay capture", flush=True)
+    print("Then: python -m zepto_offers --replay --out output/offers.json", flush=True)
     return 0
 
 
@@ -111,7 +145,6 @@ def _emit(report: OfferReport, args: argparse.Namespace) -> int:
     data = report.model_dump(mode="json")
     text = json.dumps(data, indent=2, ensure_ascii=False)
 
-    # Human-readable offer list on the terminal
     offers = report.offers
     print(f"\n=== Zepto Payment Offers ({len(offers)} kept, {report.excluded_count} excluded) ===", flush=True)
     if not offers:
@@ -148,13 +181,22 @@ def build_parser() -> argparse.ArgumentParser:
         description="Extract Zepto checkout bank/card payment offers (network-first).",
     )
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--live", action="store_true", help="Open Zepto and intercept coupon APIs")
+    mode.add_argument("--live", action="store_true", help="Open Zepto, intercept APIs, save replay capture")
+    mode.add_argument(
+        "--replay",
+        action="store_true",
+        help="HTTP-only replay of captured fetch-list (no browser)",
+    )
     mode.add_argument("--fixture", nargs="?", const=str(DEFAULT_FIXTURE), help="Use offline fixture JSON")
     mode.add_argument("--login", action="store_true", help="Interactive OTP login; save storage_state.json")
 
     p.add_argument("--wait-login", action="store_true", help="In --live, wait for user to finish OTP")
     p.add_argument("--phone", help="Mobile number to prefill on login (OTP still entered in browser)")
     p.add_argument("--storage-state", help="Path to Playwright storage state JSON")
+    p.add_argument(
+        "--capture-request",
+        help=f"Path to captured fetch-list request JSON (default: {DEFAULT_CAPTURE_PATH})",
+    )
     p.add_argument("--headless", action="store_true", help="Force headless (may fail AWS WAF)")
     p.add_argument("--lat", type=float, default=float(os.getenv("ZEPTO_LAT", "12.96902")))
     p.add_argument("--lng", type=float, default=float(os.getenv("ZEPTO_LNG", "77.75395")))
@@ -164,7 +206,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
-    # Ensure src layout imports work when run as module from repo root
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -172,13 +213,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_login(args)
     if args.live:
         return cmd_live(args)
-    # Default: fixture for reliable offline demo
-    if args.fixture or not any([args.live, args.login]):
-        if not args.fixture:
-            args.fixture = str(DEFAULT_FIXTURE)
-        return cmd_fixture(args)
-    parser.print_help()
-    return 1
+    if args.replay:
+        return cmd_replay(args)
+    # Default: fixture mode
+    if not args.fixture:
+        args.fixture = str(DEFAULT_FIXTURE)
+    return cmd_fixture(args)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+"""Normalize Zepto fetch-list payloads into Offer models."""
+
 from __future__ import annotations
 
 import re
@@ -5,16 +7,6 @@ from typing import Any
 
 from .models import Discount, Offer, OfferStatus
 
-
-BANK_OFFER_TYPES = {
-    "BANK_OFFER",
-    "BANK",
-    "CARD_OFFER",
-    "CREDIT_CARD",
-    "DEBIT_CARD",
-    "CC",
-    "DC",
-}
 
 NON_BANK_TYPES = {
     "WALLET_OFFER",
@@ -39,7 +31,6 @@ BANK_KEYWORDS = re.compile(
     re.I,
 )
 
-# Stronger signal that the offer is tied to a card instrument
 CARD_KEYWORDS = re.compile(
     r"\b("
     r"credit\s*cards?|debit\s*cards?|visa|mastercard|master\s*card|"
@@ -59,7 +50,6 @@ NON_BANK_KEYWORDS = re.compile(
     re.I,
 )
 
-# Indian-formatted amounts: 1,500 / 6,000 / 80,000
 _AMOUNT = r"([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)"
 FLAT_RE = re.compile(
     rf"(?:flat\s*|save\s*)?[₹rs\.]*\s*{_AMOUNT}\s*(?:!|\s|$|off|cashback)",
@@ -91,7 +81,6 @@ def _parse_amount(raw: str | None) -> float | None:
 
 
 def _dig(obj: Any, *paths: str, default: Any = None) -> Any:
-    """Try several dotted paths; return first hit."""
     for path in paths:
         cur: Any = obj
         ok = True
@@ -104,29 +93,6 @@ def _dig(obj: Any, *paths: str, default: Any = None) -> Any:
         if ok and cur not in (None, ""):
             return cur
     return default
-
-
-def _looks_like_offer(node: dict[str, Any]) -> bool:
-    type_hint = str(
-        node.get("offerType")
-        or node.get("offer_type")
-        or node.get("type")
-        or node.get("couponType")
-        or ""
-    ).upper()
-    if type_hint in BANK_OFFER_TYPES | NON_BANK_TYPES:
-        return True
-    return any(
-        k in node
-        for k in (
-            "couponCode",
-            "promoCode",
-            "bankName",
-            "discountAmount",
-            "minimumOrderValue",
-            "minOrderValue",
-        )
-    ) and ("title" in node or "name" in node or "subtitle" in node or "subTitle" in node)
 
 
 def _dedupe_offers(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -149,24 +115,16 @@ def _dedupe_offers(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _textish(value: Any) -> str | None:
-    """Zepto widgets often wrap copy as {text: '...'}."""
     if value is None:
         return None
     if isinstance(value, str):
         return value
-    if isinstance(value, dict):
-        if "text" in value and value["text"] not in (None, ""):
-            return str(value["text"])
-        for key in ("title", "label", "value", "name", "description"):
-            if key in value and value[key] not in (None, ""):
-                nested = _textish(value[key])
-                if nested:
-                    return nested
+    if isinstance(value, dict) and value.get("text") not in (None, ""):
+        return str(value["text"])
     return None
 
 
 def _flatten_coupon_card(item: dict[str, Any]) -> dict[str, Any]:
-    """Normalize COUPON_CARD widget `data.items` into a flat offer-like dict."""
     meta = _dig(item, "couponButton.action.actionMeta") or {}
     if not isinstance(meta, dict):
         meta = {}
@@ -181,12 +139,6 @@ def _flatten_coupon_card(item: dict[str, Any]) -> dict[str, Any]:
     terms_block = item.get("termsAndConditions") if isinstance(item.get("termsAndConditions"), dict) else {}
     terms = terms_block.get("terms") if isinstance(terms_block, dict) else item.get("terms")
     terms_desc = terms_block.get("description") if isinstance(terms_block, dict) else None
-    icon_name = _dig(item, "icon.image.name") or _dig(item, "icon.name")
-    bank_from_icon = None
-    if isinstance(icon_name, str) and icon_name:
-        cleaned = re.sub(r"\.(png|jpe?g|webp|svg)$", "", icon_name, flags=re.I).strip()
-        if _usable_bank_label(cleaned) and BANK_KEYWORDS.search(cleaned):
-            bank_from_icon = cleaned
 
     flat = {
         "title": heading or "Untitled offer",
@@ -195,17 +147,12 @@ def _flatten_coupon_card(item: dict[str, Any]) -> dict[str, Any]:
         "couponCode": code,
         "promoCode": code,
         "offerType": meta.get("couponType") or meta.get("offerType") or item.get("offerType"),
-        "couponType": meta.get("couponType") or item.get("couponType"),
         "id": meta.get("couponId") or item.get("couponId") or item.get("id"),
-        "couponId": meta.get("couponId"),
         "status": _dig(item, "couponButton.couponState") or _dig(item, "couponButton.state"),
         "terms": terms,
-        "termsDescription": terms_desc,
-        "bankName": bank_from_icon,
         "minimumOrderValue": None,
-        "_source": "coupon_card_widget",
+        "bankName": None,
     }
-    # MOV often lives in terms description: "Valid on orders above ₹999"
     blob = " ".join(str(x) for x in (heading, subheading, terms_desc, terms) if x)
     mov = MOV_RE.search(blob or "")
     if mov:
@@ -229,114 +176,54 @@ def _widgets_to_offers(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(data, dict):
             continue
         items = data.get("items")
-        if "COUPON_CARD" in name and isinstance(items, dict):
-            # Skip non-offer cards
-            meta = _dig(items, "couponButton.action.actionMeta") or {}
-            if isinstance(meta, dict) and (
-                meta.get("couponCode") or meta.get("couponType") or items.get("couponCode")
-            ):
-                cards.append(_flatten_coupon_card(items))
-        elif isinstance(items, list):
-            for entry in items:
-                if isinstance(entry, dict) and (
-                    "couponButton" in entry or "heading" in entry and "couponCode" in entry
-                ):
-                    cards.append(_flatten_coupon_card(entry))
+        if "COUPON_CARD" not in name or not isinstance(items, dict):
+            continue
+        meta = _dig(items, "couponButton.action.actionMeta") or {}
+        if isinstance(meta, dict) and (
+            meta.get("couponCode") or meta.get("couponType") or items.get("couponCode")
+        ):
+            cards.append(_flatten_coupon_card(items))
     return _dedupe_offers(cards)
 
 
 def _as_list(payload: Any) -> list[dict[str, Any]]:
+    """Widgets (live) or sections[].coupons / coupons (fixture)."""
     if payload is None:
         return []
     if isinstance(payload, list):
-        # List of offers vs list of sections
-        if payload and isinstance(payload[0], dict) and _looks_like_offer(payload[0]):
-            return [x for x in payload if isinstance(x, dict)]
-        items: list[dict[str, Any]] = []
-        for entry in payload:
-            items.extend(_as_list(entry))
-        return _dedupe_offers(items)
+        return _dedupe_offers([x for x in payload if isinstance(x, dict)])
     if not isinstance(payload, dict):
         return []
 
-    # Live Zepto fetch-list: pageLayout.widgets[].data.items coupon cards
     widget_cards = _widgets_to_offers(payload)
     if widget_cards:
         return widget_cards
 
-    # Sectioned payloads first: [{tab, coupons: [...]}, ...]
-    sections = payload.get("sections") or payload.get("tabs")
+    sections = payload.get("sections")
     if isinstance(sections, list):
-        items = []
+        items: list[dict[str, Any]] = []
         for section in sections:
             if not isinstance(section, dict):
                 continue
-            for key in ("coupons", "offers", "items", "paymentOffers", "data"):
-                chunk = section.get(key)
-                if isinstance(chunk, list):
-                    items.extend(x for x in chunk if isinstance(x, dict))
+            chunk = section.get("coupons")
+            if isinstance(chunk, list):
+                items.extend(x for x in chunk if isinstance(x, dict))
         if items:
             return _dedupe_offers(items)
 
-    for key in (
-        "coupons",
-        "offers",
-        "paymentOffers",
-        "payment_offers",
-        "bankOffers",
-        "availableCoupons",
-        "eligibleCoupons",
-        "ineligibleCoupons",
-        "couponList",
-    ):
-        val = payload.get(key)
-        if isinstance(val, list) and val:
-            return _dedupe_offers([x for x in val if isinstance(x, dict)])
-        if isinstance(val, dict):
-            nested = _as_list(val)
-            if nested:
-                return nested
+    coupons = payload.get("coupons")
+    if isinstance(coupons, list) and coupons:
+        return _dedupe_offers([x for x in coupons if isinstance(x, dict)])
 
-    data = payload.get("data")
-    if isinstance(data, (dict, list)):
-        nested = _as_list(data)
-        if nested:
-            return nested
-
-    # Recursive collect of dicts that look like offers
-    found: list[dict[str, Any]] = []
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            if _looks_like_offer(node):
-                found.append(node)
-                return
-            for v in node.values():
-                walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                walk(v)
-
-    walk(payload)
-    return _dedupe_offers(found)
+    return []
 
 
 def _parse_discount(text: str | None, explicit: dict[str, Any] | None = None) -> Discount:
     explicit = explicit or {}
     raw = text or explicit.get("raw")
     dtype = str(explicit.get("type") or explicit.get("discountType") or "").lower()
-    value = explicit.get("value") or explicit.get("discountAmount") or explicit.get("amount")
-    max_cap = explicit.get("max_cap") or explicit.get("maxDiscount") or explicit.get("maximumDiscount")
-
-    if value is not None:
-        value = _parse_amount(value)
-        if value is not None:
-            # Zepto often stores paise
-            if value >= 1000 and value == int(value) and "percent" not in dtype:
-                if value % 100 == 0 and value >= 10000:
-                    value = value / 100.0
-
-    max_cap_f = _parse_amount(max_cap) if max_cap is not None else None
+    value = _parse_amount(explicit.get("value") or explicit.get("discountAmount") or explicit.get("amount"))
+    max_cap_f = _parse_amount(explicit.get("max_cap") or explicit.get("maxDiscount"))
 
     if raw and (value is None or dtype in ("", "unknown")):
         pct = PERCENT_RE.search(raw)
@@ -374,13 +261,7 @@ def _parse_discount(text: str | None, explicit: dict[str, Any] | None = None) ->
 
 
 def _status_from(item: dict[str, Any], blob: str) -> OfferStatus:
-    status = str(
-        item.get("status")
-        or item.get("couponStatus")
-        or item.get("eligibilityStatus")
-        or item.get("lockStatus")
-        or ""
-    ).lower()
+    status = str(item.get("status") or "").lower()
     if status in {"unlocked", "eligible", "applicable", "available"} or status.startswith("unlock"):
         return "unlocked"
     if "ineligible" in status or status in {"locked", "lock"} or re.search(r"\blocked\b", blob.lower()):
@@ -392,59 +273,12 @@ def _status_from(item: dict[str, Any], blob: str) -> OfferStatus:
     return "unknown"
 
 
-def _bank_name(item: dict[str, Any], title: str, description: str) -> str:
-    for path in (
-        "bankName",
-        "bank_name",
-        "cardName",
-        "card_name",
-        "issuerName",
-        "issuer",
-        "partnerName",
-        "partner",
-        "brandName",
-        "brand",
-        "instrumentName",
-        "paymentInstrument",
-        "bank.name",
-        "card.name",
-        "meta.bankName",
-    ):
-        val = _dig(item, path)
-        if val and _usable_bank_label(str(val)):
-            return str(val).strip()
-    # Prefer short bank/card phrase from subtitle lines
-    for candidate in (
-        item.get("subtitle"),
-        item.get("subTitle"),
-        item.get("description"),
-        description,
-        title,
-    ):
-        if not candidate:
-            continue
-        text = str(candidate).strip()
-        extracted = _extract_bank_phrase(text)
-        if extracted:
-            return extracted
-        if BANK_KEYWORDS.search(text) and _usable_bank_label(text):
-            return text
-    return "Unknown bank/card"
-
-
 def _usable_bank_label(label: str) -> bool:
     s = label.strip()
     if not s or len(s) > 80:
         return False
-    if re.fullmatch(r"[0-9a-f-]{20,}", s, re.I):
+    if re.search(r"payment\s*logos?|untitled|unknown", s, re.I):
         return False
-    if re.search(
-        r"payment\s*logos?|logo-?\d*|favicon|rgb-?\d*|banks?\s*&\s*cards|untitled|unknown",
-        s,
-        re.I,
-    ):
-        return False
-    # Reject labels that are just the full offer headline
     if re.search(r"\b(flat|save|get|upto|up to)\b.*[₹rs%].*\boff\b|\bcashback\b", s, re.I):
         return False
     return True
@@ -453,7 +287,6 @@ def _usable_bank_label(label: str) -> bool:
 def _extract_bank_phrase(text: str) -> str | None:
     patterns = (
         r"with\s+([A-Za-z][A-Za-z0-9 &.+'-]{1,50}?(?:Bank|Visa|Mastercard|Master Card|RuPay|Amex|Credit Cards?|Debit Cards?)[^.,;]*)",
-        r"using\s+([A-Za-z][A-Za-z0-9 &.+'-]{1,40}(?:Credit Cards?|Debit Cards?|Bank)?)",
         r"on\s+([A-Za-z][A-Za-z0-9 &.+'-]{1,50}?(?:Bank|Visa|Mastercard|RuPay|Credit Cards?|Debit Cards?)[^.,;]*)",
     )
     for pat in patterns:
@@ -465,55 +298,40 @@ def _extract_bank_phrase(text: str) -> str | None:
     return None
 
 
+def _bank_name(item: dict[str, Any], title: str, description: str) -> str:
+    for key in ("bankName", "cardName", "partnerName"):
+        val = item.get(key)
+        if val and _usable_bank_label(str(val)):
+            return str(val).strip()
+    for candidate in (item.get("subtitle"), description, title):
+        if not candidate:
+            continue
+        text = str(candidate).strip()
+        extracted = _extract_bank_phrase(text)
+        if extracted:
+            return extracted
+        if BANK_KEYWORDS.search(text) and _usable_bank_label(text):
+            return text
+    return "Unknown bank/card"
+
+
 def normalize_offer(item: dict[str, Any]) -> Offer:
-    title = str(
-        _dig(
-            item,
-            "title",
-            "name",
-            "offerTitle",
-            "displayTitle",
-            "header",
-            "couponTitle",
-            default="Untitled offer",
-        )
-    )
-    description = str(
-        _dig(item, "description", "subtitle", "subTitle", "shortDescription", "details", default="") or ""
-    )
+    title = str(item.get("title") or item.get("name") or "Untitled offer")
+    description = str(item.get("description") or item.get("subtitle") or item.get("subTitle") or "")
     blob = " ".join(
         str(x)
-        for x in (
-            title,
-            description,
-            item.get("couponCode"),
-            item.get("promoCode"),
-            item.get("offerType"),
-            item.get("type"),
-            item.get("bankName"),
-        )
+        for x in (title, description, item.get("couponCode"), item.get("promoCode"), item.get("offerType"), item.get("bankName"))
         if x
     )
 
-    promo = _dig(item, "couponCode", "promoCode", "code", "coupon_code", "promo_code")
-    mov = _dig(
-        item,
-        "minimumOrderValue",
-        "minOrderValue",
-        "min_order_value",
-        "mov",
-        "eligibility.minOrderValue",
-    )
+    promo = item.get("couponCode") or item.get("promoCode")
+    mov = item.get("minimumOrderValue") or item.get("minOrderValue")
     if mov is None:
         m = MOV_RE.search(blob)
         if m:
             mov = _parse_amount(m.group(1))
     else:
         mov = _parse_amount(mov)
-        if mov is not None and mov >= 1000 and mov % 100 == 0:
-            # paise → rupees heuristic for large MOV
-            if mov >= 10000:
-                mov = mov / 100.0
 
     unlock = None
     more = SHOP_MORE_RE.search(blob)
@@ -521,21 +339,19 @@ def normalize_offer(item: dict[str, Any]) -> Offer:
         amt = _parse_amount(more.group(1))
         unlock = f"Shop for ₹{amt:g} more to unlock" if amt is not None else None
 
-    offer_type = str(
-        _dig(item, "offerType", "offer_type", "type", "couponType", "coupon_type", default="") or ""
-    ).upper() or None
+    offer_type = str(item.get("offerType") or item.get("couponType") or item.get("type") or "").upper() or None
 
     discount_text = title if re.search(r"%|₹|rs|off|cashback|flat", title, re.I) else description
     discount = _parse_discount(
         discount_text,
         {
-            "type": item.get("discountType") or item.get("discount_type"),
-            "value": item.get("discountAmount") or item.get("discount_amount") or item.get("amount"),
-            "maxDiscount": item.get("maxDiscount") or item.get("maximumDiscount"),
+            "type": item.get("discountType"),
+            "value": item.get("discountAmount") or item.get("amount"),
+            "maxDiscount": item.get("maxDiscount"),
         },
     )
 
-    terms = _dig(item, "terms", "tnc", "termsAndConditions", "knowMore", "know_more")
+    terms = item.get("terms") or item.get("tnc")
     if isinstance(terms, list):
         terms = " | ".join(str(t) for t in terms)
 
@@ -550,7 +366,7 @@ def normalize_offer(item: dict[str, Any]) -> Offer:
         offer_type=offer_type,
         terms=str(terms) if terms else None,
         unlock_message=unlock,
-        raw_id=str(_dig(item, "id", "couponId", "offerId", "campaignId", default="")) or None,
+        raw_id=str(item.get("id") or item.get("couponId") or "") or None,
     )
 
 
