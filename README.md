@@ -3,8 +3,7 @@
 Python CLI that extracts **bank / credit / debit card payment offers** from Zepto checkout
 (`Coupon & Offers` → **Payment Offers**) and prints a clean list to the terminal (plus optional JSON).
 
-Built for the [Startup Tech Hiring take-home](https://docs.google.com/forms/d/e/1FAIpQLSf_iCCrzKtViQI3ZYAMfoh_pv3kIcpZTqO66JARwPVzykXZXA/viewform):
-outcome + code quality + reasoning matter more than a prescribed technique.
+
 
 ## What it outputs
 
